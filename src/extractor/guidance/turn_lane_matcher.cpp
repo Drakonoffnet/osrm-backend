@@ -1,5 +1,5 @@
-#include "extractor/guidance/turn_lane_matcher.hpp"
 #include "extractor/guidance/toolkit.hpp"
+#include "extractor/guidance/turn_lane_matcher.hpp"
 #include "util/guidance/toolkit.hpp"
 
 #include <boost/assert.hpp>
@@ -17,18 +17,18 @@ namespace lanes
 {
 
 // Translate Turn Tags into a Matching Direction Modifier
-DirectionModifier::Enum getMatchingModifier(const std::string &tag)
+DirectionModifier::Enum getMatchingModifier(const TurnLaneType::Mask &tag)
 {
-    const constexpr char *tag_by_modifier[] = {"reverse",
-                                               "sharp_right",
-                                               "right",
-                                               "slight_right",
-                                               "through",
-                                               "slight_left",
-                                               "left",
-                                               "sharp_left",
-                                               "merge_to_left",
-                                               "merge_to_right"};
+    const constexpr TurnLaneType::Mask tag_by_modifier[] = {TurnLaneType::uturn,
+                                                            TurnLaneType::sharp_right,
+                                                            TurnLaneType::right,
+                                                            TurnLaneType::slight_right,
+                                                            TurnLaneType::straight,
+                                                            TurnLaneType::slight_left,
+                                                            TurnLaneType::left,
+                                                            TurnLaneType::sharp_left,
+                                                            TurnLaneType::merge_to_left,
+                                                            TurnLaneType::merge_to_right};
     const auto index =
         std::distance(tag_by_modifier, std::find(tag_by_modifier, tag_by_modifier + 10, tag));
 
@@ -51,7 +51,7 @@ DirectionModifier::Enum getMatchingModifier(const std::string &tag)
 }
 
 // check whether a match of a given tag and a turn instruction can be seen as valid
-bool isValidMatch(const std::string &tag, const TurnInstruction instruction)
+bool isValidMatch(const TurnLaneType::Mask &tag, const TurnInstruction instruction)
 {
     using util::guidance::hasLeftModifier;
     using util::guidance::hasRightModifier;
@@ -59,12 +59,13 @@ bool isValidMatch(const std::string &tag, const TurnInstruction instruction)
         return instruction.type == TurnType::Merge;
     };
 
-    if (tag == "reverse")
+    if (tag == TurnLaneType::uturn)
     {
         return hasLeftModifier(instruction) ||
                instruction.direction_modifier == DirectionModifier::UTurn;
     }
-    else if (tag == "sharp_right" || tag == "right" || tag == "slight_right")
+    else if (tag == TurnLaneType::sharp_right || tag == TurnLaneType::right ||
+             tag == TurnLaneType::slight_right)
     {
         if (isMirroredModifier(instruction))
             return hasLeftModifier(instruction);
@@ -72,7 +73,7 @@ bool isValidMatch(const std::string &tag, const TurnInstruction instruction)
             // needs to be adjusted for left side driving
             return leavesRoundabout(instruction) || hasRightModifier(instruction);
     }
-    else if (tag == "through")
+    else if (tag == TurnLaneType::straight)
     {
         return instruction.direction_modifier == DirectionModifier::Straight ||
                instruction.type == TurnType::Suppressed || instruction.type == TurnType::NewName ||
@@ -87,7 +88,8 @@ bool isValidMatch(const std::string &tag, const TurnInstruction instruction)
                  instruction.direction_modifier == DirectionModifier::SlightRight)) ||
                instruction.type == TurnType::UseLane;
     }
-    else if (tag == "slight_left" || tag == "left" || tag == "sharp_left")
+    else if (tag == TurnLaneType::slight_left || tag == TurnLaneType::left ||
+             tag == TurnLaneType::sharp_left)
     {
         if (isMirroredModifier(instruction))
             return hasRightModifier(instruction);
@@ -100,7 +102,7 @@ bool isValidMatch(const std::string &tag, const TurnInstruction instruction)
     return false;
 }
 
-typename Intersection::const_iterator findBestMatch(const std::string &tag,
+typename Intersection::const_iterator findBestMatch(const TurnLaneType::Mask &tag,
                                                     const Intersection &intersection)
 {
     const constexpr double idealized_turn_angles[] = {0, 35, 90, 135, 180, 225, 270, 315};
@@ -122,15 +124,15 @@ typename Intersection::const_iterator findBestMatch(const std::string &tag,
         });
 }
 
-typename Intersection::const_iterator findBestMatchForReverse(const std::string &leftmost_tag,
-                                                              const Intersection &intersection)
+typename Intersection::const_iterator
+findBestMatchForReverse(const TurnLaneType::Mask &leftmost_tag, const Intersection &intersection)
 {
     const auto leftmost_itr = findBestMatch(leftmost_tag, intersection);
     if (leftmost_itr + 1 == intersection.cend())
         return intersection.begin();
 
     const constexpr double idealized_turn_angles[] = {0, 35, 90, 135, 180, 225, 270, 315};
-    const std::string tag = "reverse";
+    const TurnLaneType::Mask tag = TurnLaneType::uturn;
     const auto idealized_angle = idealized_turn_angles[getMatchingModifier(tag)];
     return std::min_element(
         intersection.begin() + std::distance(intersection.begin(), leftmost_itr),
@@ -163,17 +165,18 @@ bool canMatchTrivially(const Intersection &intersection, const LaneDataVector &l
             if (findBestMatch(lane_data[lane].tag, intersection) !=
                 intersection.begin() + road_index)
                 return false;
+
             ++lane;
         }
     }
     return lane == lane_data.size() ||
-           (lane + 1 == lane_data.size() && lane_data.back().tag == "reverse");
+           (lane + 1 == lane_data.size() && lane_data.back().tag == TurnLaneType::uturn);
 }
 
 Intersection triviallyMatchLanesToTurns(Intersection intersection,
                                         const LaneDataVector &lane_data,
                                         const util::NodeBasedDynamicGraph &node_based_graph,
-                                        const LaneStringID lane_string_id,
+                                        const LaneDescriptionID lane_string_id,
                                         LaneDataIdMap &lane_data_to_id)
 {
     std::size_t road_index = 1, lane = 0;
@@ -212,7 +215,7 @@ Intersection triviallyMatchLanesToTurns(Intersection intersection,
     }
 
     // handle reverse tag, if present
-    if (lane + 1 == lane_data.size() && lane_data.back().tag == "reverse")
+    if (lane + 1 == lane_data.size() && lane_data.back().tag == TurnLaneType::uturn)
     {
         std::size_t u_turn = 0;
         if (node_based_graph.GetEdgeData(intersection[0].turn.eid).reversed)
